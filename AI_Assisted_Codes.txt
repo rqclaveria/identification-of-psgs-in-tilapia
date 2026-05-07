@@ -1,0 +1,285 @@
+AI Assisted Codes using Gemini 3.0 Fast Model for the paper Identification of Genomic Regions Under Selection in Farmed Nile Tilapia (Oreochromis niloticus)
+
+# (1) Conversion of .gff file into .bed12 file
+
+library(tidyverse)
+
+# Use your existing filtered 'bed_cdsonly' dataframe
+bed12 <- bed_cdsonly %>%
+  group_by(geneID) %>%
+  arrange(start) %>%
+  summarize(
+    chrom = first(X1),
+    # The absolute start of the first CDS and end of the last
+    chromStart = min(start),
+    chromEnd = max(end),
+    name = first(gene_name),
+    score = 0,
+    strand = first(strand),
+    thickStart = chromStart,
+    thickEnd = chromEnd,
+    itemRgb = 0,
+    # Count of CDS segments
+    blockCount = n(),
+    # Comma-separated list of lengths
+    blockSizes = paste0(end - start, collapse = ","),
+    # Comma-separated list of relative starts
+    blockStarts = paste0(start - min(start), collapse = ",")
+  ) %>%
+  ungroup() %>%
+  select(chrom, chromStart, chromEnd, name, score, strand, 
+         thickStart, thickEnd, itemRgb, blockCount, blockSizes, blockStarts)
+
+write.table(bed12, "spliced_genes.bed12", sep="\t", quote=F, r
+
+# (6) Parsing of Model 0 and Model 2 PAML mlc files
+
+import os
+import re
+import pandas as pd
+
+# Update this path if the folder is in a different directory
+target_folder = 'Model_0_Filtered'
+
+def parse_model0_mlc(file_path):
+    """Extracts lnL, dN, dS, and global omega for Model 0."""
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # 1. Extract Log Likelihood (lnL)
+    lnL_match = re.search(r"lnL\(.*?\):\s+(-?\d+\.\d+)", content)
+    lnL = float(lnL_match.group(1)) if lnL_match else None
+
+    # 2. Extract global dN, dS, and omega
+    # In Model 0, these are often found in the "w (dN/dS) =" line or 
+    # the summary table without specific branch labels.
+    
+    # Extract omega (w)
+    omega_match = re.search(r"omega \(dN/dS\)\s+=\s+(\d+\.\d+)", content)
+    omega = float(omega_match.group(1)) if omega_match else None
+
+    # Extract dN and dS (from the tree summary line)
+    # This looks for the summary line: tree length for dN: 0.xxxx  dS: 0.xxxx
+    dn_ds_match = re.search(r"tree length for dN:\s+(\d+\.\d+)\s+dS:\s+(\d+\.\d+)", content)
+    dN = float(dn_ds_match.group(1)) if dn_ds_match else None
+    dS = float(dn_ds_match.group(2)) if dn_ds_match else None
+
+    return lnL, dN, dS, omega
+
+data = []
+
+if not os.path.exists(target_folder):
+    print(f"Error: {target_folder} not found. Please check your path.")
+else:
+    print(f"Processing {target_folder}...")
+    for root, dirs, files in os.walk(target_folder):
+        for file in files:
+            if file.endswith(".mlc"):
+                gene_id = file.replace(".codon.mlc", "").replace(".mlc", "")
+                full_path = os.path.join(root, file)
+                
+                try:
+                    lnL, dN, dS, omega = parse_model0_mlc(full_path)
+                    data.append({
+                        'Model': 'Model_0',
+                        'Gene': gene_id,
+                        'lnL': lnL,
+                        'dN': dN,
+                        'dS': dS,
+                        'omega': omega
+                    })
+                except Exception as e:
+                    print(f"Error parsing {full_path}: {e}")
+
+# (6) Parsing of Model 0 and Model 2 PAML mlc files
+
+import os
+import re
+import pandas as pd
+
+# Define the folders to scan
+folders = ['Branch_Runs_GST', 'Branch_Runs_GIFTW', 'Branch_Runs_AqCor', 'Branch_Runs_AqAm']
+
+def parse_mlc(file_path):
+    """Extracts lnL, dN, dS, and omega for foreground branches (#1)."""
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # 1. Extract Log Likelihood (lnL)
+    lnL_match = re.search(r"lnL\(.*?\):\s+(-?\d+\.\d+)", content)
+    lnL = float(lnL_match.group(1)) if lnL_match else None
+
+    # 2. Extract dN, dS, and omega for the foreground branch (#1)
+    # This regex looks for the row in the summary table ending with ' #1'
+    # Pattern: branch  t  t  k  omega  dN  dS
+    branch_pattern = r"\d+\.\.\d+\s+\d+\.\d+\s+\d+\.\d+\s+\d+\.\d+\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+.*#1"
+    branch_match = re.search(branch_pattern, content)
+    
+    if branch_match:
+        omega = float(branch_match.group(1))
+        dN = float(branch_match.group(2))
+        dS = float(branch_match.group(3))
+    else:
+        omega, dN, dS = None, None, None
+
+    return lnL, dN, dS, omega
+
+data = []
+
+print("Starting parsing...")
+for folder in folders:
+    if not os.path.exists(folder):
+        print(f"Skipping {folder}: Directory not found.")
+        continue
+    
+    print(f"Processing {folder}...")
+    for root, dirs, files in os.walk(folder):
+        for file in files:
+            if file.endswith(".mlc"):
+                gene_id = file.replace(".codon.mlc", "").replace(".mlc", "")
+                full_path = os.path.join(root, file)
+                
+                try:
+                    lnL, dN, dS, omega = parse_mlc(full_path)
+                    data.append({
+                        'Hypothesis': folder.replace('Branch_Runs_', ''),
+                        'Gene': gene_id,
+                        'lnL': lnL,
+                        'dN': dN,
+                        'dS': dS,
+                        'omega': omega
+                    })
+                except Exception as e:
+                    print(f"Error parsing {full_path}: {e}")
+
+# Save to CSV
+df = pd.DataFrame(data)
+df.to_csv('paml_results_summary.csv', index=False)
+
+# (6) Parsing of Model 0 and Model 2 PAML mlc files
+
+import os
+import re
+import pandas as pd
+
+folders = ['Branch_Runs_GST', 'Branch_Runs_GIFTW', 'Branch_Runs_AqCor', 'Branch_Runs_AqAm']
+
+def parse_mlc_v410(file_path):
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # 1. Extract Log Likelihood (lnL)
+    lnL_match = re.search(r"lnL\(.*?\):\s+(-?\d+\.\d+)", content)
+    lnL = float(lnL_match.group(1)) if lnL_match else None
+
+    # 2. Extract Omega (w)
+    # In your output: "w (dN/dS) for branches:  0.00010 0.50983"
+    # Usually, the second value is your foreground (#1) branch
+    omega_match = re.search(r"w \(dN/dS\) for branches:\s+[\d.]+\s+([\d.]+)", content)
+    omega = float(omega_match.group(1)) if omega_match else None
+
+    # 3. Extract tree lengths for dN and dS (Best proxy for total divergence)
+    dn_match = re.search(r"tree length for dN:\s+([\d.]+)", content)
+    ds_match = re.search(r"tree length for dS:\s+([\d.]+)", content)
+    
+    dN = float(dn_match.group(1)) if dn_match else None
+    dS = float(ds_match.group(1)) if ds_match else None
+
+    return lnL, dN, dS, omega
+
+data = []
+
+print("Starting specialized parsing for PAML 4.10.9...")
+
+for folder in folders:
+    if not os.path.exists(folder):
+        continue
+    
+    print(f"Processing {folder}...")
+    for root, dirs, files in os.walk(folder):
+        for file in files:
+            # Checking for .mlc as you requested
+            if file.endswith(".mlc"):
+                full_path = os.path.join(root, file)
+                folder_name = os.path.basename(root)
+                gene_id = folder_name.replace('.codon', '')
+                
+                try:
+                    lnL, dN, dS, omega = parse_mlc_v410(full_path)
+                    data.append({
+                        'Hypothesis': folder.replace('Branch_Runs_', ''),
+                        'Gene': gene_id,
+                        'lnL': lnL,
+                        'dN': dN,
+                        'dS': dS,
+                        'omega': omega
+                    })
+                except Exception as e:
+                    print(f"Error in {gene_id}: {e}")
+
+df = pd.DataFrame(data)
+df.to_csv('branch_results_summary.csv', index=False)
+print(f"Done! Parsed {len(df)} genes.")
+
+# (6) Parsing of Model 0 and Model 2 PAML mlc files
+
+import os
+import re
+import pandas as pd
+
+# Mapping Strains to their representative sample names in the MLC
+strain_to_samples = {
+    'GIFTW': ['SRR33475987', 'SRR33475961'],
+    'AqAm': ['SRR11842924', 'SRR11842889'],
+    'AqCor': ['SRR11842903', 'SRR11842902'],
+    'GST': ['ERR2752240', 'ERR2752210']
+}
+
+folders = ['Branch_Runs_AqAm', 'Branch_Runs_AqCor', 'Branch_Runs_GIFTW', 'Branch_Runs_GST']
+root_dir = './'
+results = []
+
+# Regex to find the dS tree block
+ds_tree_pattern = re.compile(r'dS tree:\n(.*?);', re.DOTALL)
+
+print("Starting Tip-Direct Extraction...")
+
+for folder in folders:
+    strain_id = folder.replace('Branch_Runs_', '')
+    target_samples = strain_to_samples.get(strain_id)
+    strain_path = os.path.join(root_dir, folder)
+    
+    if not os.path.exists(strain_path): continue
+
+    gene_folders = [d for d in os.listdir(strain_path) if d.endswith('.codon')]
+    for g_folder in gene_folders:
+        file_path = os.path.join(strain_path, g_folder, f"{g_folder}.mlc")
+        if not os.path.isfile(file_path): continue
+
+        with open(file_path, 'r') as f:
+            content = f.read()
+            ds_match = ds_tree_pattern.search(content)
+            
+            if ds_match:
+                newick = ds_match.group(1)
+                fg_ds = None
+                
+                # Check for each sample assigned to this strain
+                for sample in target_samples:
+                    # Regex: find sample name, ignore optional #N labels, and grab the value after colon
+                    # Example match: SRR33475987: 0.002718
+                    pattern = re.compile(rf'{sample}(?:\s*#[\d\.]+)?:\s*([\d\.]+)')
+                    match = pattern.search(newick)
+                    if match:
+                        fg_ds = float(match.group(1))
+                        break # Take the first one found
+                
+                if fg_ds is not None:
+                    results.append({
+                        'Hypothesis': strain_id,
+                        'Gene': g_folder.replace('.codon', ''),
+                        'model2_real_dS': fg_ds
+                    })
+
+df = pd.DataFrame(results)
+df.to_csv('tip_direct_dS.csv', index=False)
